@@ -1,3 +1,8 @@
+Notice: this has been barely tested, if you're willing to run this with your PC and modded switch please hit me up on discord: gummyboiyt
+
+I'd love to test and play with you
+
+
 # parsec-2-switch-tool
 Ever wanted to play smash or other switch games natively with your friends over the internet
 But they don't have online? a switch? only a shitty PC?
