@@ -250,7 +250,7 @@ class SmashParsecGUI:
 
         self.canvas = tk.Canvas(self.container_frame, borderwidth=0, highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(self.container_frame, orient="vertical", command=self.canvas.yview)
-        self.routing_frame = ttk.LabelFrame(self.canvas, text="Assign Controllers (Connect to configure)", padding=10)
+        self.routing_frame = ttk.LabelFrame(self.canvas, text="Assign Gamepads (Connect to configure)", padding=10)
         
         self.routing_frame.bind(
             "<Configure>", 
@@ -288,7 +288,7 @@ class SmashParsecGUI:
             widget.destroy()
             
         self.port_vars.clear()
-        self.routing_frame.config(text=f"Assign controllers (Active: {self.num_players} Players)")
+        self.routing_frame.config(text=f"Assign gamepads")
 
         for i in range(1, self.num_players + 1):
             row = ttk.Frame(self.routing_frame, padding=5)
