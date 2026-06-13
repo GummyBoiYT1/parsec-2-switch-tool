@@ -28,6 +28,7 @@ class SwitchConnection:
         self.is_running = False
         self.heartbeat_thread = None
         self.active_count = 4 
+        self.lock = threading.Lock()
 
     def start(self, switch_ip, active_count=4):
         self.switch_ip = switch_ip
@@ -42,20 +43,24 @@ class SwitchConnection:
         self.is_running = False
         if self.heartbeat_thread:
             self.heartbeat_thread.join()
-        for slot in self.slots.values():
-            self._reset_slot_data(slot)
+      
+        with self.lock:
+            for slot in self.slots.values():
+                self._reset_slot_data(slot)
         self._send_packet()
 
     def update_slot(self, player_number, con_type, buttons, lx, ly, rx, ry):
-        if player_number in self.slots:
-            self.slots[player_number] = {
-                "type": con_type, "buttons": buttons,
-                "lx": lx, "ly": ly, "rx": rx, "ry": ry
-            }
+        with self.lock:
+            if player_number in self.slots:
+                self.slots[player_number] = {
+                    "type": con_type, "buttons": buttons,
+                    "lx": lx, "ly": ly, "rx": rx, "ry": ry
+                }
 
     def disconnect_slot(self, player_number):
-        if player_number in self.slots:
-            self._reset_slot_data(self.slots[player_number])
+        with self.lock:
+            if player_number in self.slots:
+                self._reset_slot_data(self.slots[player_number])
 
     def _reset_slot_data(self, slot_dict):
         slot_dict.update({"type": 0, "buttons": 0, "lx": 0, "ly": 0, "rx": 0, "ry": 0})
@@ -73,9 +78,10 @@ class SwitchConnection:
         # tell sys-hidplus how many controllers to look for
         packet_data = [self.MAGIC_NUMBER, self.active_count]
         
-        for p_id in sorted(self.slots.keys()):
-            s = self.slots[p_id]
-            packet_data.extend([s["type"], s["buttons"], s["lx"], s["ly"], s["rx"], s["ry"]])
+        with self.lock:
+            for p_id in sorted(self.slots.keys()):
+                s = self.slots[p_id]
+                packet_data.extend([s["type"], s["buttons"], s["lx"], s["ly"], s["rx"], s["ry"]])
             
         try:
             packet = pack(self.PACKET_FORMAT, *packet_data)
@@ -180,7 +186,7 @@ class SmashParsecGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("parsec 2 switch tool")
-        self.root.geometry("780x670") 
+        self.root.geometry("890x570") 
         
         pygame.init()
         pygame.joystick.init()
@@ -191,6 +197,12 @@ class SmashParsecGUI:
         self.port_vars = {}
         self.active_joysticks = {}
         
+        # network for clients !
+        self.data_lock = threading.Lock()
+        self.network_clients = {}
+        self.client_listener_sock = None
+        self.listen_for_clients = False
+
         self.root.bind("<KeyPress>", self._on_keyboard_press)
         self.root.bind("<KeyRelease>", self._on_keyboard_release)
         self.pressed_keys = set()
@@ -198,8 +210,43 @@ class SmashParsecGUI:
         self._load_icon()
         self._build_ui()
         self._refresh_pc_joysticks()
+        self._start_client_listener()
         
         self.root.after(10, self._poll_hardware_events)
+
+    def _start_client_listener(self):
+        # udp packets from clients to us :>
+        # we take those packets and translate them
+        #  to data which then our app sends to the switch
+        self.client_listener_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self.client_listener_sock.bind(("0.0.0.0", 9000))
+            self.listen_for_clients = True
+            threading.Thread(target=self._receive_client_packets, daemon=True).start()
+        except Exception as e:
+            print(f"Could not bind client receiver port: {e}")
+
+    def _receive_client_packets(self):
+        from struct import calcsize, unpack
+        fmt = "<32sIiiii"
+        while self.listen_for_clients:
+            try:
+                data, addr = self.client_listener_sock.recvfrom(1024)
+                if len(data) == calcsize(fmt):
+                    # Its a player! Set them up for the app to use
+                    raw_name, buttons, lx, ly, rx, ry = unpack(fmt, data)
+                    user_str = raw_name.decode('utf-8', errors='ignore').strip('\x00').strip()
+                    
+                    client_label = f"[Net] {user_str}"
+                    
+                    with self.data_lock:
+                        self.network_clients[client_label] = {
+                            "buttons": buttons, "lx": lx, "ly": ly, "rx": rx, "ry": ry, "last_seen": time()
+                        }
+            except:
+                # most likey corrupted data or something else talking to our port
+                # either way its not important so ignore it.
+                pass
 
     def _load_icon(self):
         img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pro_controller.png")
@@ -244,6 +291,9 @@ class SmashParsecGUI:
 
         self.conn_btn = ttk.Button(self.ip_frame, text="Connect", command=self._toggle_connection)
         self.conn_btn.pack(side="left", padx=10)
+        
+        self.kbd_btn = ttk.Button(self.ip_frame, text="Configure Keyboard", command=self._open_keyboard_config)
+        self.kbd_btn.pack(side="left", padx=5)
 
         self.container_frame = ttk.Frame(self.root)
         self.container_frame.pack(fill="both", expand=True, padx=15, pady=5)
@@ -272,6 +322,95 @@ class SmashParsecGUI:
         self.rescan_btn.pack(side="right", padx=15)
         self.status_lbl = ttk.Label(footer, text="Disconnected", foreground="gray")
         self.status_lbl.pack(side="left", padx=15)
+
+        self.info_frame = ttk.LabelFrame(self.root, text="Over the internet guide:", padding=10)
+        self.info_frame.pack(fill="x", padx=15, pady=(5, 15), side="bottom")
+        
+        instructions_text = (
+            "This app is automatically running on port 9000.\n"
+            "You might have to do some port forwarding before you friends may connect.\n"
+            "Once they do connect, select their username and enjoy!"
+        )
+        self.info_lbl = ttk.Label(self.info_frame, text=instructions_text, justify="left", foreground="gray")
+        self.info_lbl.pack(fill="x")
+
+    def _open_keyboard_config(self):
+        config_win = tk.Toplevel(self.root)
+        config_win.title("Keyboard Layout Configuration")
+        config_win.geometry("400x550")
+        config_win.grab_set()
+
+        canvas = tk.Canvas(config_win, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(config_win, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas, padding=10)
+        
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        ttk.Label(scroll_frame, text="Click a field and press a key to rebind it.", font=("TkDefaultFont", 10, "italic")).pack(pady=5)
+
+        labels_map = {
+            1: "Button A", 1<<1: "Button B", 1<<2: "Button X", 1<<3: "Button Y",
+            1<<11: "Minus", 1<<10: "Plus", 1<<13: "D-Pad Up", 1<<15: "D-Pad Down",
+            1<<12: "D-Pad Left", 1<<14: "D-Pad Right", 1<<6: "Button L", 1<<7: "Button R",
+            1<<8: "Button ZL", 1<<9: "Button ZR"
+        }
+        stick_labels = {
+            'ly_1': ("Left Stick Up", 'ly', 1), 'ly_-1': ("Left Stick Down", 'ly', -1),
+            'lx_-1': ("Left Stick Left", 'lx', -1), 'lx_1': ("Left Stick Right", 'lx', 1)
+        }
+
+        entries = {}
+
+        def start_listening(target_key, is_stick=False):
+            entries[target_key].config(text="Press any key...")
+            entries[target_key].focus_set()
+            
+            def capture_key(event):
+                new_key = event.keysym if event.keysym in ['Up', 'Down', 'Left', 'Right'] else event.char
+                if not new_key: return "break"
+                
+                if is_stick:
+                    for k, v in list(self.KEYBOARD_STICK_MAP.items()):
+                        if v == stick_labels[target_key][1:]:
+                            del self.KEYBOARD_STICK_MAP[k]
+                    self.KEYBOARD_STICK_MAP[new_key] = stick_labels[target_key][1:]
+                else:
+                    for k, v in list(self.KEYBOARD_MAP.items()):
+                        if v == target_key:
+                            del self.KEYBOARD_MAP[k]
+                    self.KEYBOARD_MAP[new_key] = target_key
+                
+                entries[target_key].config(text=new_key)
+                entries[target_key].unbind("<Key>")
+                return "break"
+                
+            entries[target_key].bind("<Key>", capture_key)
+
+        for bitmask, label_text in labels_map.items():
+            row = ttk.Frame(scroll_frame, padding=2)
+            row.pack(fill="x")
+            ttk.Label(row, text=label_text, width=20).pack(side="left")
+            current_key = next((k for k, v in self.KEYBOARD_MAP.items() if v == bitmask), "[None]")
+            btn = ttk.Button(row, text=current_key, width=15)
+            btn.pack(side="right")
+            entries[bitmask] = btn
+            btn.config(command=lambda b=bitmask: start_listening(b, False))
+
+        ttk.Separator(scroll_frame, orient="horizontal").pack(fill="x", pady=10)
+
+        for s_id, data in stick_labels.items():
+            row = ttk.Frame(scroll_frame, padding=2)
+            row.pack(fill="x")
+            ttk.Label(row, text=data[0], width=20).pack(side="left")
+            current_key = next((k for k, v in self.KEYBOARD_STICK_MAP.items() if v == data[1:]), "[None]")
+            btn = ttk.Button(row, text=current_key, width=15)
+            btn.pack(side="right")
+            entries[s_id] = btn
+            btn.config(command=lambda sid=s_id: start_listening(sid, True))
 
     def _on_player_count_changed(self, event):
         try:
@@ -329,7 +468,13 @@ class SmashParsecGUI:
             except:
                 pass
 
-        for i in self.port_vars.keys():
+        now = time()
+        with self.data_lock:
+            for client_name, info in list(self.network_clients.items()):
+                if now - info["last_seen"] < 4.0: 
+                    joystick_names.append(client_name)
+
+        for i in list(self.port_vars.keys()):
             self.port_vars[i]["dropdown_widget"].config(values=joystick_names)
             current_val = self.port_vars[i]["gamepad_source"].get()
             if current_val not in joystick_names:
@@ -429,6 +574,9 @@ class SmashParsecGUI:
     def _poll_hardware_events(self):
         pygame.event.pump()
         
+        if int(time() * 10) % 8 == 0:
+            self._refresh_pc_joysticks()
+
         if self.switch_conn is not None and self.switch_conn.is_running:
             for switch_port in range(1, self.num_players + 1):
                 if switch_port not in self.port_vars: 
@@ -436,6 +584,20 @@ class SmashParsecGUI:
                     
                 selected_name = self.port_vars[switch_port]["gamepad_source"].get()
                 if selected_name == "Keyboard":
+                    continue
+
+                if "[Net] " in selected_name:
+                    with self.data_lock:
+                        has_client = selected_name in self.network_clients
+                        client_data = self.network_clients.get(selected_name) if has_client else None
+                    
+                    if client_data:
+                        v_con = self.controllers[switch_port]
+                        v_con.buttons_state = client_data["buttons"]
+                        v_con.set_sticks(client_data["lx"], client_data["ly"], client_data["rx"], client_data["ry"])
+                    else:
+                        if switch_port in self.controllers:
+                            self.controllers[switch_port].blue_screen_clear()
                     continue
 
                 if selected_name not in self.active_joysticks:
@@ -488,6 +650,9 @@ if __name__ == "__main__":
     try:
         root.mainloop()
     finally:
+        app.listen_for_clients = False
         if app.switch_conn:
             app.switch_conn.stop()
+        if app.client_listener_sock:
+            app.client_listener_sock.close()
         pygame.quit()
