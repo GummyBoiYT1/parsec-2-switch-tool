@@ -11,7 +11,7 @@ class ParsecToSwitchClient:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("switch 2 parsec tool - client")
+        self.root.title("parsec 2 switch tool - client")
         self.root.geometry("420x360")
         
         pygame.init()
