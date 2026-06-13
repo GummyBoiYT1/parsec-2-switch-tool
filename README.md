@@ -26,6 +26,8 @@ OPTIONAL:
 
 | SysDVR is great for this (with required patches)
 
+| the client, so players may send input without with their keyboards without using keyboard on your PC. or, if you're hosting on MacOS a way for players to use their gamepads
+
 INSTRUCTIONS:
 
 | Go to your Internet settings in your switch. Write down where it says 'IP Address'
