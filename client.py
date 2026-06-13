@@ -11,7 +11,7 @@ class ParsecToSwitchClient:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("parsec 2 switch tool - client")
+        self.root.title("switch 2 parsec tool - client")
         self.root.geometry("420x360")
         
         pygame.init()
@@ -82,7 +82,7 @@ class ParsecToSwitchClient:
             try:
                 j = pygame.joystick.Joystick(i)
                 j.init()
-                choices.append(f"Gamepad ID {i}: {j.get_name()[:15]}")
+                choices.append(f"ID {i}: {j.get_name()[:15]}")
             except: pass
         self.source_dropdown.config(values=choices)
 
@@ -238,40 +238,65 @@ class ParsecToSwitchClient:
         pygame.event.pump()
         selected = self.source_var.get()
         
-        if "Gamepad ID" in selected and self.is_running:
+        if "ID " in selected and self.is_running:
             try:
                 joy_id = int(selected.split("ID ")[1].split(":")[0])
-                joy = pygame.joystick.Joystick(joy_id)
+                
+                # CACHE FIX: Check if we already have this joystick initialized
+                if not hasattr(self, 'joystick') or self.joystick.get_id() != joy_id:
+                    self.joystick = pygame.joystick.Joystick(joy_id)
+                    self.joystick.init()
+                
+                joy = self.joystick
                 
                 mask = 0
+                num_buttons = joy.get_numbuttons()
                 for p_idx, bit in self.PYGAME_BUTTON_MAP.items():
-                    if p_idx < joy.get_numbuttons() and joy.get_button(p_idx):
+                    if p_idx < num_buttons and joy.get_button(p_idx):
                         mask |= bit
-                if joy.get_numaxes() >= 5:
+                
+                # Check axes safely
+                num_axes = joy.get_numaxes()
+                
+                # ZL / ZR Triggers 
+                if num_axes >= 6:
+                    if joy.get_axis(2) > 0.4: mask |= (1 << 8)  # ZL
+                    if joy.get_axis(5) > 0.4: mask |= (1 << 9)  # ZR
+                elif num_axes >= 3:
                     if joy.get_axis(2) > 0.4: mask |= (1 << 8)
-                    if joy.get_axis(5) > 0.4: mask |= (1 << 9)
+
+                # D-Pad (Hats)
                 if joy.get_numhats() > 0:
                     hx, hy = joy.get_hat(0)
-                    if hy == 1:  mask |= (1 << 13)
-                    if hy == -1: mask |= (1 << 15)
-                    if hx == -1: mask |= (1 << 12)
-                    if hx == 1:  mask |= (1 << 14)
+                    if hy == 1:  mask |= (1 << 13)   # Up
+                    if hy == -1: mask |= (1 << 15)   # Down
+                    if hx == -1: mask |= (1 << 12)   # Left
+                    if hx == 1:  mask |= (1 << 14)   # Right
                 
                 self.buttons_state = mask
                 
-                if joy.get_numaxes() >= 4:
+                if num_axes >= 2:
                     self.lx = int(joy.get_axis(0) * 32767)
                     self.ly = int(-joy.get_axis(1) * 32767)
+                
+                if num_axes >= 5:
                     self.rx = int(joy.get_axis(3) * 32767)
                     self.ry = int(-joy.get_axis(4) * 32767)
-                    if abs(self.lx) < 4500: self.lx = 0
-                    if abs(self.ly) < 4500: self.ly = 0
-                    if abs(self.rx) < 4500: self.rx = 0
-                    if abs(self.ry) < 4500: self.ry = 0
-            except Exception: pass
+                elif num_axes >= 4: # Fallback mapping
+                    self.rx = int(joy.get_axis(2) * 32767)
+                    self.ry = int(-joy.get_axis(3) * 32767)
+
+                if abs(self.lx) < 4500: self.lx = 0
+                if abs(self.ly) < 4500: self.ly = 0
+                if abs(self.rx) < 4500: self.rx = 0
+                if abs(self.ry) < 4500: self.ry = 0
+                
+            except Exception as e:
+                print(f"Joystick polling error: {e}")
+                pass
 
         self.root.after(10, self._poll_input)
-
+    
     def _network_loop(self):
         while self.is_running:
             try:
