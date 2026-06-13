@@ -26,7 +26,12 @@ NOTICABLE PROBLEMS:
 | 5+ controllers gets unstable. frequent disconnects and sometimes breaks sys-hidplus and you will have to restart.
 | Closing the app without clicking 'Disconnect' will not remove all the controllers. Use the disconnect button when stopping your play session.
 
-Keyboard mappings:
+FOR NETWORKING:
+| The app is hosted on port 9000. You can change that by editing main.py but i wouldnt recommend it.
+| On the client all you need to do is connect via IP and Port and the host will have to map your name into the controller they would like you to use.
+| Enjoy!
+
+Keyboard mappings (can be remapped):
 WASD - move
 j - A Button
 k - B Button
